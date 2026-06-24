@@ -24,8 +24,12 @@ def read_uploaded_file(uploaded_file):
     Reads either CSV or Excel file based on extension.
     """
     name = uploaded_file.name.lower()
+    #if name.endswith(".csv"):
+        #return pd.read_csv(uploaded_file, encoding="cp1252")
     if name.endswith(".csv"):
-        return pd.read_csv(uploaded_file, encoding="cp1252")
+        df = pd.read_csv(uploaded_file, encoding="cp1252")
+        df = df.dropna(subset=["Account Name", "OpportunityID"])
+        return df
     elif name.endswith(".xlsx"):
         return pd.read_excel(uploaded_file)
     else:
@@ -90,6 +94,7 @@ if base_file is not None:
             template_df["Delivery Year"] = ""
             template_df["Property Count"] = ""
             template_df["ClientID List"] = ""
+            template_df["Months"] = ""
 
             st.subheader("Template Preview")
             st.dataframe(template_df)
@@ -183,6 +188,9 @@ if completed_file is not None:
             implementation_fee = row["Implementation Fee"] if pd.notnull(row["Implementation Fee"]) else 0
             monthly_amount = row["Monthly Amount"] if pd.notnull(row["Monthly Amount"]) else 0
             property_count = int(row["Property Count"]) if pd.notnull(row["Property Count"]) and str(row["Property Count"]).strip() != "" else 0
+            months = int(row["Months"]) if "Months" in df.columns and pd.notnull(row["Months"]) and str(row["Months"]).strip() != "" else 0
+            if scenario == "A" and months <= 0:
+                st.warning(f"Missing or invalid Months value for {account_name}")
 
             start_month = int(row["Start Month"]) if pd.notnull(row["Start Month"]) and str(row["Start Month"]).strip() != "" else None
             start_year = int(row["Start Year"]) if pd.notnull(row["Start Year"]) and str(row["Start Year"]).strip() != "" else None
@@ -216,18 +224,29 @@ if completed_file is not None:
                         "Scenario": "A"
                     })
 
-                # Ongoing monthly row (single row for now)
-                if monthly_amount > 0:
-                    output_rows.append({
-                        "Account Name": account_name,
-                        "AviClientId": avi_client_id,
-                        "Month": delivery_month,
-                        "Year": delivery_year,
-                        "Product": product,
-                        "Description": "",
-                        "Amount": monthly_amount,
-                        "Scenario": "A"
-                    })
+                
+                # Ongoing monthly rows (multi-month)
+                if monthly_amount > 0 and months > 0 and delivery_month and delivery_year:
+                    for i in range(months):
+                        month = delivery_month + i
+                        year = delivery_year
+
+                        # Handle year rollover
+                        while month > 12:
+                            month -= 12
+                            year += 1
+
+                        output_rows.append({
+                            "Account Name": account_name,
+                            "AviClientId": avi_client_id,
+                            "Month": month,
+                            "Year": year,
+                            "Product": product,
+                            "Description": "",
+                            "Amount": monthly_amount,
+                            "Scenario": "A"
+                        })
+
 
             # ========== SCENARIO B ==========
             elif scenario == "B":
