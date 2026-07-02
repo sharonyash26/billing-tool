@@ -27,9 +27,18 @@ def read_uploaded_file(uploaded_file):
     #if name.endswith(".csv"):
         #return pd.read_csv(uploaded_file, encoding="cp1252")
     if name.endswith(".csv"):
-        df = pd.read_csv(uploaded_file, encoding="cp1252")
-        df = df.dropna(subset=["Account Name", "OpportunityID"])
+      #  df = pd.read_csv(uploaded_file, encoding="cp1252")
+      #  df = df.dropna(subset=["Account Name", "OpportunityID"])
+        
+        df = pd.read_csv(uploaded_file, encoding="utf-8-sig")
+        df.columns = df.columns.str.strip()
+
+        if "Account Name" in df.columns and "OpportunityID" in df.columns:
+            df = df.dropna(subset=["Account Name", "OpportunityID"])
+
+
         return df
+    
     elif name.endswith(".xlsx"):
         return pd.read_excel(uploaded_file)
     else:
