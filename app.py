@@ -3,321 +3,375 @@ import pandas as pd
 import string
 import io
 
-st.title("Billing Tool - Finance Output")
+st.set_page_config(page_title="Billing Tool", layout="wide")
+st.title("Billing Tool")
 
 # =========================================
 # Helper functions
 # =========================================
-
 def parse_client_ids(value):
     """
     Scenario C helper:
     Example cell value: 3001,3002,3003,3004,3005
     """
-    if pd.isna(value):
+    if pd.isna(value) or str(value).strip() == "":
         return []
     return [x.strip() for x in str(value).split(",") if x.strip()]
 
 
+def read_uploaded_file(uploaded_file):
+    """
+    Reads either CSV or Excel file based on extension.
+    """
+    name = uploaded_file.name.lower()
+    #if name.endswith(".csv"):
+        #return pd.read_csv(uploaded_file, encoding="cp1252")
+    if name.endswith(".csv"):
+        df = pd.read_csv(uploaded_file, encoding="cp1252")
+        df = df.dropna(subset=["Account Name", "OpportunityID"])
+        return df
+    elif name.endswith(".xlsx"):
+        return pd.read_excel(uploaded_file)
+    else:
+        raise ValueError("Unsupported file type. Please upload CSV or Excel.")
+
+
 # =========================================
-# Upload manager file
+# STEP 1 - Upload Power BI export and generate template
 # =========================================
+st.header("Step 1 — Upload Power BI Export")
 
-uploaded_file = st.file_uploader("Upload your input CSV", type=["csv"])
+st.write(
+    """
+Upload the CSV exported from Power BI.  
+This file should contain only the base columns:
 
-if uploaded_file is not None:
-    # Load uploaded manager CSV
-    df = pd.read_csv(uploaded_file, encoding="cp1252")
+- Account Name
+- Product
+- Contract Amount
+- OpportunityID
+- AviClientId
+"""
+)
 
-    st.write("Preview of uploaded data:")
-    st.dataframe(df.head())
+base_file = st.file_uploader(
+    "Upload Power BI export (CSV or Excel)",
+    type=["csv", "xlsx"],
+    key="base_upload"
+)
 
-    # =========================================
-    # Validate required columns
-    # =========================================
-    required_columns = [
-        "Account Name",
-        "Product",
-        "Contract Amount",
-        "OpportunityID",
-        "Scenario",
-        "Start Month",
-        "Start Year",
-        "Implementation Fee",
-        "Monthly Amount",
-        "Delivery Month",
-        "Delivery Year",
-        "Property Count",
-        "AviClientId"
-    ]
+if base_file is not None:
+    try:
+        base_df = read_uploaded_file(base_file)
+        base_df = base_df.dropna(how="all")
 
-    missing_cols = [col for col in required_columns if col not in df.columns]
+        st.subheader("Base File Preview")
+        st.dataframe(base_df)
 
-    if missing_cols:
-        st.error(f"Missing required columns in uploaded file: {missing_cols}")
-        st.stop()
+        base_required_cols = [
+            "Account Name",
+            "Product",
+            "Contract Amount",
+            "OpportunityID",
+            "AviClientId"
+        ]
 
-    output_rows = []
+        base_missing = [c for c in base_required_cols if c not in base_df.columns]
 
-    # =========================================
-    # BILLING ENGINE
-    # =========================================
-    for _, row in df.iterrows():
-        scenario = str(row["Scenario"]).strip().upper()
+        if base_missing:
+            st.error(f"Missing required columns in Power BI export: {base_missing}")
+        else:
+            # Build fillable template
+            template_df = base_df.copy()
 
-        account_name = row["Account Name"]
-        product = row["Product"]
-        opportunity_id = row["OpportunityID"]
+            # Add manager-entry columns
+            template_df["Scenario"] = ""
+            template_df["Billing Status"] = "Not Started/New"
+            template_df["Start Month"] = ""
+            template_df["Start Year"] = ""
+            template_df["Implementation Fee"] = ""
+            template_df["Monthly Amount"] = ""
+            template_df["Delivery Month"] = ""
+            template_df["Delivery Year"] = ""
+            template_df["Property Count"] = ""
+            template_df["ClientID List"] = ""
+            template_df["Months"] = ""
 
-        contract_amount = row["Contract Amount"] if pd.notnull(row["Contract Amount"]) else 0
-        implementation_fee = row["Implementation Fee"] if pd.notnull(row["Implementation Fee"]) else 0
-        monthly_amount = row["Monthly Amount"] if pd.notnull(row["Monthly Amount"]) else 0
-        property_count = int(row["Property Count"]) if pd.notnull(row["Property Count"]) else 0
+            st.subheader("Template Preview")
+            st.dataframe(template_df)
 
-        start_month = int(row["Start Month"]) if pd.notnull(row["Start Month"]) else None
-        start_year = int(row["Start Year"]) if pd.notnull(row["Start Year"]) else None
-        delivery_month = int(row["Delivery Month"]) if pd.notnull(row["Delivery Month"]) else None
-        delivery_year = int(row["Delivery Year"]) if pd.notnull(row["Delivery Year"]) else None
+            # Download template as Excel
+            template_file = io.BytesIO()
+            template_df.to_excel(template_file, index=False, engine="openpyxl")
 
-        # Primary AviClientId for Scenario A/B
-        avi_client_id = row["AviClientId"] if pd.notnull(row["AviClientId"]) else None
-
-        # Optional Scenario C support
-        client_ids = []
-        if "ClientID List" in df.columns:
-            client_ids = parse_client_ids(row["ClientID List"])
-
-        # Warn if Scenario C property count and client ID list don't match
-        if scenario == "C" and len(client_ids) > 0 and property_count != len(client_ids):
-            st.warning(
-                f"ClientID count does not match Property Count for Account Name: {account_name}"
+            st.download_button(
+                label="Download Input Template (Fill This)",
+                data=template_file.getvalue(),
+                file_name="Billing_Input_Template.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
+    except Exception as e:
+        st.error(f"Could not process base upload: {e}")
+
+
+# =========================================
+# STEP 2 - Upload completed template and process billing logic
+# =========================================
+st.header("Step 2 — Upload Completed Template")
+
+st.write(
+    """
+After filling the template, upload it here.
+
+Required manager-entered columns:
+- Scenario
+- Start Month
+- Start Year
+- Implementation Fee
+- Monthly Amount
+- Delivery Month
+- Delivery Year
+- Property Count
+- ClientID List (for Scenario C)
+"""
+)
+
+completed_file = st.file_uploader(
+    "Upload completed template (CSV or Excel)",
+    type=["csv", "xlsx"],
+    key="completed_upload"
+)
+
+if completed_file is not None:
+    try:
+        df = read_uploaded_file(completed_file)
+        df = df.dropna(how="all")
+
+        st.subheader("Completed Template Preview")
+        st.dataframe(df.head())
+
+        required_cols = [
+            "Account Name",
+            "Product",
+            "Contract Amount",
+            "OpportunityID",
+            "AviClientId",
+            "Scenario",
+            "Billing Status",
+            "Start Month",
+            "Start Year",
+            "Implementation Fee",
+            "Monthly Amount",
+            "Delivery Month",
+            "Delivery Year",
+            "Property Count"
+
+        ]
+
+        missing = [c for c in required_cols if c not in df.columns]
+
+        if missing:
+            st.error(f"Missing required columns in completed template: {missing}")
+            st.stop()
+
+        output_rows = []
+
         # =========================================
-        # SCENARIO A
+        # BILLING ENGINE
         # =========================================
-        if scenario == "A":
-            # Implementation fee row
-            if implementation_fee > 0:
+        for _, row in df.iterrows():
+            scenario = str(row["Scenario"]).strip().upper()
+
+            account_name = row["Account Name"]
+            product = row["Product"]
+            opportunity_id = row["OpportunityID"]
+
+            contract_amount = row["Contract Amount"] if pd.notnull(row["Contract Amount"]) else 0
+            implementation_fee = row["Implementation Fee"] if pd.notnull(row["Implementation Fee"]) else 0
+            monthly_amount = row["Monthly Amount"] if pd.notnull(row["Monthly Amount"]) else 0
+            property_count = int(row["Property Count"]) if pd.notnull(row["Property Count"]) and str(row["Property Count"]).strip() != "" else 0
+            months = int(row["Months"]) if "Months" in df.columns and pd.notnull(row["Months"]) and str(row["Months"]).strip() != "" else 0
+            if scenario == "A" and months <= 0:
+                st.warning(f"Missing or invalid Months value for {account_name}")
+
+            start_month = int(row["Start Month"]) if pd.notnull(row["Start Month"]) and str(row["Start Month"]).strip() != "" else None
+            start_year = int(row["Start Year"]) if pd.notnull(row["Start Year"]) and str(row["Start Year"]).strip() != "" else None
+            delivery_month = int(row["Delivery Month"]) if pd.notnull(row["Delivery Month"]) and str(row["Delivery Month"]).strip() != "" else None
+            delivery_year = int(row["Delivery Year"]) if pd.notnull(row["Delivery Year"]) and str(row["Delivery Year"]).strip() != "" else None
+
+            avi_client_id = row["AviClientId"] if pd.notnull(row["AviClientId"]) and str(row["AviClientId"]).strip() != "" else None
+
+            client_ids = []
+            if "ClientID List" in df.columns:
+                client_ids = parse_client_ids(row["ClientID List"])
+
+            # Validation warning for Scenario C
+            if scenario == "C" and len(client_ids) > 0 and property_count != len(client_ids):
+                st.warning(
+                    f"ClientID count does not match Property Count for {account_name}"
+                )
+
+            # ========== SCENARIO A ==========
+            if scenario == "A":
+                # Implementation fee row
+                if implementation_fee > 0:
+                    output_rows.append({
+                        "Account Name": account_name,
+                        "AviClientId": avi_client_id,
+                        "Month": start_month,
+                        "Year": start_year,
+                        "Product": product,
+                        "Description": "Implementation fee",
+                        "Amount": implementation_fee,
+                        "Scenario": "A"
+                    })
+
+                
+                # Ongoing monthly rows (multi-month)
+                if monthly_amount > 0 and months > 0 and delivery_month and delivery_year:
+                    for i in range(months):
+                        month = delivery_month + i
+                        year = delivery_year
+
+                        # Handle year rollover
+                        while month > 12:
+                            month -= 12
+                            year += 1
+
+                        output_rows.append({
+                            "Account Name": account_name,
+                            "AviClientId": avi_client_id,
+                            "Month": month,
+                            "Year": year,
+                            "Product": product,
+                            "Description": "",
+                            "Amount": monthly_amount,
+                            "Scenario": "A"
+                        })
+
+
+            # ========== SCENARIO B ==========
+            elif scenario == "B":
+                half = contract_amount * 0.5
+
                 output_rows.append({
                     "Account Name": account_name,
                     "AviClientId": avi_client_id,
                     "Month": start_month,
                     "Year": start_year,
                     "Product": product,
-                    "Description": "Implementation fee",
-                    "Scenario": "A",
-                    "Billing Queue": start_month,
-                    "Contract Amount": contract_amount,
-                    "Split Type": "One time Implementation",
-                    "Split Amount": implementation_fee,
-                    "Balance after Split": contract_amount - implementation_fee,
-                    "Onboarding": "Implementation",
-                    "Amount": implementation_fee,
-                    "Frequency": "One-Time",
-                    "OpportunityID": opportunity_id,
-                    "Status": "Ready to Bill"
+                    "Description": "50% due upon signature",
+                    "Amount": half,
+                    "Scenario": "B"
                 })
 
-            # Ongoing monthly row (single row for now)
-            if monthly_amount > 0:
                 output_rows.append({
                     "Account Name": account_name,
                     "AviClientId": avi_client_id,
                     "Month": delivery_month,
                     "Year": delivery_year,
                     "Product": product,
-                    "Description": "",
-                    "Scenario": "A",
-                    "Billing Queue": delivery_month,
-                    "Contract Amount": None,
-                    "Split Type": "Ongoing",
-                    "Split Amount": monthly_amount,
-                    "Balance after Split": contract_amount - implementation_fee - monthly_amount,
-                    "Onboarding": "Onboarded",
-                    "Amount": monthly_amount,
-                    "Frequency": "Monthly",
-                    "OpportunityID": opportunity_id,
-                    "Status": "Forecast"
+                    "Description": "50% due upon completion",
+                    "Amount": half,
+                    "Scenario": "B"
                 })
 
-        # =========================================
-        # SCENARIO B
-        # =========================================
-        elif scenario == "B":
-            half_amount = contract_amount * 0.5
-
-            # Signature row
-            output_rows.append({
-                "Account Name": account_name,
-                "AviClientId": avi_client_id,
-                "Month": start_month,
-                "Year": start_year,
-                "Product": product,
-                "Description": "50% due upon signature",
-                "Scenario": "B",
-                "Billing Queue": start_month,
-                "Contract Amount": contract_amount,
-                "Split Type": "50% Due Upon Signature",
-                "Split Amount": half_amount,
-                "Balance after Split": contract_amount - half_amount,
-                "Onboarding": "Implementation",
-                "Amount": half_amount,
-                "Frequency": "One-Time",
-                "OpportunityID": opportunity_id,
-                "Status": "Ready to Bill"
-            })
-
-            # Completion row
-            output_rows.append({
-                "Account Name": account_name,
-                "AviClientId": avi_client_id,
-                "Month": delivery_month,
-                "Year": delivery_year,
-                "Product": product,
-                "Description": "50% due upon completion",
-                "Scenario": "B",
-                "Billing Queue": delivery_month,
-                "Contract Amount": None,
-                "Split Type": "Final Delivery",
-                "Split Amount": half_amount,
-                "Balance after Split": 0,
-                "Onboarding": "",
-                "Amount": half_amount,
-                "Frequency": "One-Time",
-                "OpportunityID": opportunity_id,
-                "Status": "Forecast"
-            })
-
-        # =========================================
-        # SCENARIO C
-        # =========================================
-        elif scenario == "C":
-            # Implementation fee row
-            if implementation_fee > 0:
-                # If Scenario C has a ClientID List, use the first client ID
-                impl_client_id = client_ids[0] if len(client_ids) > 0 else avi_client_id
-
-                output_rows.append({
-                    "Account Name": account_name,
-                    "AviClientId": impl_client_id,
-                    "Month": start_month,
-                    "Year": start_year,
-                    "Product": product,
-                    "Description": "Implementation fee",
-                    "Scenario": "C",
-                    "Billing Queue": start_month,
-                    "Contract Amount": contract_amount,
-                    "Split Type": "One time Implementation",
-                    "Split Amount": implementation_fee,
-                    "Balance after Split": contract_amount - implementation_fee,
-                    "Onboarding": "",
-                    "Amount": implementation_fee,
-                    "Frequency": "One-Time",
-                    "OpportunityID": opportunity_id,
-                    "Status": "Ready to Bill"
-                })
-
-            remaining = contract_amount - implementation_fee
-
-            if property_count > 0:
-                per_property_amount = remaining / property_count
-                letters = list(string.ascii_uppercase)
-
-                for i in range(property_count):
-                    current_client_id = client_ids[i] if i < len(client_ids) else None
-
-                    if i < len(letters):
-                        property_label = letters[i]
-                    else:
-                        property_label = f"{i+1}"
+            # ========== SCENARIO C ==========
+            elif scenario == "C":
+                # Implementation fee row
+                if implementation_fee > 0:
+                    first_id = client_ids[0] if client_ids else avi_client_id
 
                     output_rows.append({
                         "Account Name": account_name,
-                        "AviClientId": current_client_id,
-                        "Month": delivery_month,
-                        "Year": delivery_year,
+                        "AviClientId": first_id,
+                        "Month": start_month,
+                        "Year": start_year,
                         "Product": product,
-                        "Description": f"{product} - Property {property_label}",
-                        "Scenario": "C",
-                        "Billing Queue": delivery_month,
-                        "Contract Amount": None,
-                        "Split Type": "Split Invoice",
-                        "Split Amount": per_property_amount,
-                        "Balance after Split": per_property_amount,
-                        "Onboarding": "",
-                        "Amount": per_property_amount,
-                        "Frequency": "One-Time",
-                        "OpportunityID": opportunity_id,
-                        "Status": "Forecast"
+                        "Description": "Implementation fee",
+                        "Amount": implementation_fee,
+                        "Scenario": "C"
                     })
 
-    # =========================================
-    # Engine output
-    # =========================================
-    final_output = pd.DataFrame(output_rows)
+                remaining = contract_amount - implementation_fee
 
-    # Fix AviClientId so it does not show decimals like 379.0
-    final_output["AviClientId"] = pd.to_numeric(
-        final_output["AviClientId"], errors="coerce"
-    ).astype("Int64")
+                if property_count > 0:
+                    each = remaining / property_count
+                    letters = list(string.ascii_uppercase)
 
-    # Warn if IDs missing
-    if final_output["AviClientId"].isnull().any():
-        st.warning("Some rows are missing AviClientId")
-        missing_rows = final_output[final_output["AviClientId"].isnull()][
-            ["Account Name", "Product", "Scenario", "OpportunityID"]
-        ]
-        st.write("Rows missing AviClientId:")
-        st.dataframe(missing_rows)
+                    for i in range(property_count):
+                        cid = client_ids[i] if i < len(client_ids) else None
+                        label = letters[i] if i < 26 else str(i + 1)
 
-    st.write("Engine Output Preview:")
-    st.dataframe(final_output)
+                        output_rows.append({
+                            "Account Name": account_name,
+                            "AviClientId": cid,
+                            "Month": delivery_month,
+                            "Year": delivery_year,
+                            "Product": product,
+                            "Description": f"{product} - Property {label}",
+                            "Amount": each,
+                            "Scenario": "C"
+                        })
 
-    # =========================================
-    # Finance output
-    # =========================================
-    finance_output = pd.DataFrame()
+        # =========================================
+        # ENGINE OUTPUT
+        # =========================================
+        engine_df = pd.DataFrame(output_rows)
 
-    finance_output["AviClientId"] = final_output["AviClientId"]
-    finance_output["Month"] = final_output["Month"]
-    finance_output["Year"] = final_output["Year"]
-    finance_output["ClientName"] = final_output["Account Name"]
-    finance_output["Product"] = final_output["Product"]
-    finance_output["Category"] = final_output["Product"]
-    finance_output["Description"] = final_output["Description"].fillna("")
-    finance_output["Value"] = final_output["Amount"]
-    finance_output["SiteName"] = None
-    finance_output["City"] = None
-    finance_output["State"] = None
-    finance_output["Zip"] = None
-    finance_output["Comment"] = "Generated from Billing Tool"
+        if not engine_df.empty:
+            engine_df["AviClientId"] = pd.to_numeric(
+                engine_df["AviClientId"], errors="coerce"
+            ).astype("Int64")
 
-    st.write("Finance Output Preview:")
-    st.dataframe(finance_output)
+        st.subheader("Engine Output Preview")
+        st.dataframe(engine_df)
 
-    # =========================================
-    # Download Engine Output as Excel
-    # =========================================
-    engine_output_file = io.BytesIO()
-    final_output.to_excel(engine_output_file, index=False, engine="openpyxl")
+        # Download Engine Output
+        engine_excel = io.BytesIO()
+        engine_df.to_excel(engine_excel, index=False, engine="openpyxl")
 
-    st.download_button(
-        label="Download Engine Output (Excel)",
-        data=engine_output_file.getvalue(),
-        file_name="Engine_Output.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+        st.download_button(
+            "Download Engine Output (Excel)",
+            data=engine_excel.getvalue(),
+            file_name="Engine_Output.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
-    # =========================================
-    # Download as Excel
-    # =========================================
-    output = io.BytesIO()
-    finance_output.to_excel(output, index=False, engine="openpyxl")
+        # =========================================
+        # FINANCE OUTPUT
+        # =========================================
+        finance_df = pd.DataFrame()
 
-    st.download_button(
-        label="Download Final Billing File (Excel)",
-        data=output.getvalue(),
-        file_name="Final_Billing_Output.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+        finance_df["AviClientId"] = engine_df["AviClientId"]
+        finance_df["Month"] = engine_df["Month"]
+        finance_df["Year"] = engine_df["Year"]
+        finance_df["ClientName"] = engine_df["Account Name"]
+        finance_df["Product"] = engine_df["Product"]
+        finance_df["Category"] = engine_df["Product"]
+        finance_df["Description"] = engine_df["Description"].fillna("")
+        finance_df["Value"] = engine_df["Amount"]
+
+        finance_df["SiteName"] = ""
+        finance_df["City"] = ""
+        finance_df["State"] = ""
+        finance_df["Zip"] = ""
+        finance_df["Comment"] = "Generated from Billing Tool"
+
+        st.subheader("Finance Output Preview")
+        st.dataframe(finance_df)
+
+        # Download Finance Output
+        finance_excel = io.BytesIO()
+        finance_df.to_excel(finance_excel, index=False, engine="openpyxl")
+
+        st.download_button(
+            "Download Final Billing File (Excel)",
+            data=finance_excel.getvalue(),
+            file_name="Final_Billing_Output.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    except Exception as e:
+        st.error(f"Could not process completed template: {e}")
